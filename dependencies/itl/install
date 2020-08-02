@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+
+# For more info, checkout: https://github.com/guyinatuxedo/itl
+
+import os
+import stat
+
+if __name__ == "__main__":
+    print("Installing itl (Inspire The Liars)")
+
+    os.system("sudo apt-get install -y patchelf")
+
+    originalItl = open("itl-original", "r")
+    newItl = open("itl", "w")
+
+    line = originalItl.readline()
+    while line:
+    	# Write in the install directory
+    	if "15935728" in line:
+    		line = line.replace("15935728", os.getcwd())
+    	newItl.write(line)
+    	line = originalItl.readline()
+
+    originalItl.close()
+    newItl.close()
+
+    permissions = os.stat("itl")
+    os.chmod("itl", permissions.st_mode | stat.S_IROTH | stat.S_IXOTH | stat.S_IWOTH)
+
+    newItl = open("itl", "r")
+    toolItl = open("/usr/bin/itl", "w")
+
+    line = newItl.read()
+    while line:
+    	toolItl.write(line)
+    	line = newItl.read()
+
+    newItl.close()
+    toolItl.close()
+
+    permissions = os.stat("/usr/bin/itl")
+    os.chmod("/usr/bin/itl", permissions.st_mode | stat.S_IROTH | stat.S_IXOTH)

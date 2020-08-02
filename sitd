@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+
+import os
+import pickle
+import argparse
+import subprocess
+from pwn import *
+
+elf = None
+
+# The various binary attributes we are looking for
+info = {"arch":None, "linked":False, "canary":False, "nx":False, "pie":False, "relro":False}
+
+# The target functions we are looking for
+targetFunctions = {"system":None, "puts":None}
+
+# The target strings we are looking for
+targetStrings = {"/bin/sh":None, "/bin/bash":None}
+
+def getBinInfo(binary):
+	global elf
+	global info
+
+	# Wrap pwntools "elf()" functionallity
+	elf = ELF(binary)
+
+	# Wrape "file"
+	file = str(subprocess.check_output(["file", binary]))
+	info = {"arch":None, "link":False, "canary":False, "nx":False, "pie":False, "relro":False}
+
+	# Check for architecture
+	if elf.arch	== "amd64":
+		info["arch"] = "amd64"
+	elif elf.arch == "i386":
+		info["arch"] = "i386"
+
+	# Check for static / dynamic linking
+	if "dynamically linked" in file:
+		info["link"] = True
+
+	# Check for canary
+	if elf.canary == True:
+		info["canary"] = True
+
+	# Check for nx
+	if elf.nx == True:
+		info["nx"] = True
+
+	# Check for pie
+	if elf.pie == True:
+		info["pie"] = True
+
+	# Check for relro
+	if elf.relro == "FULL":
+		info["relro"] = True
+
+def checkTargetFunctions():
+	# Check if target functions are present
+	for function in targetFunctions.keys():
+		try:
+			targetFunctions[function] = hex(elf.symbols[function])
+		except:
+			try:
+				functionBytes = bytes(function, 'utf-8')
+				targetFunctions[function] = hex(elf.symbols[functionBytes])
+			except:
+				continue
+
+def checkTargetStrings(binary):
+	# Check if target strings are present
+	with open(binary, "rb") as file:
+		fileContents = file.read()
+		for string in targetStrings.keys():
+			stringBytes = bytes(string, 'utf-8')
+			if stringBytes in fileContents:
+				targetStrings[string] = fileContents.find(stringBytes) + elf.address
+
+def report(automation):
+	if automation == False:
+		print("Architecture:      %s" % str(info["arch"])) 
+		print("Dynamically Linked %s" % str(info["link"]))
+		print("Stack Canary:      %s" % str(info["canary"]))
+		print("NX Stack:          %s" % str(info["nx"]))
+		print("PIE:               %s" % str(info["pie"]))
+		print("RELRO:             %s" % str(info["relro"]))
+		print("Imported Target Functions: %s" % str(targetFunctions))
+		print("Interesting Strings:       %s" % str(targetStrings))
+	else:
+		try:
+			currentDirectory = os.getcwd() + "/"
+			outputFile = open(currentDirectory + "sitd-out", "wb")			
+		except:
+			print("Could not open output file")
+		try:
+			pickle.dump(info, outputFile)
+			pickle.dump(targetFunctions, outputFile)
+			pickle.dump(targetStrings, outputFile)
+		except:
+			print("Could not write to output file")
+
+
+if __name__ == "__main__":
+	parser = argparse.ArgumentParser(description = "A Tool")
+
+	# Add our args
+	parser.add_argument("-b", type=str, help="The binary you are working with.", default=None)
+	parser.add_argument("-e", type=bool, help="Use this flag to direct output to a file, mainly used for autmoation purposes.", nargs='?', const=True, default=False)
+
+	# Parse out our args
+	args = parser.parse_args()
+
+	binary = args.b
+	automation = args.e
+
+	# A check to ensure that we got a binary specified
+	if binary == None:
+		print("Usage:\nsitd -b <binary>")
+		exit()
+
+
+	# Enumerate basic binary info
+	getBinInfo(binary)
+
+	# Check if target functions are present in the binary
+	checkTargetFunctions()
+
+	# Check if target strings are present in the binary
+	checkTargetStrings(binary)
+
+	# Report the findings
+	report(automation)
