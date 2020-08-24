@@ -133,20 +133,23 @@ class LinkerPatcher:
 		if self.create_exploit:
 			self.create_ldpreload_exploit()
 
+def main():
+    # Parse out the arguments
+    parser = argparse.ArgumentParser(description=HELP_DESCRIPTION)
+    parser.add_argument("-b", metavar='-B', type=str, help=HELP_BINARY, default=None)
+    parser.add_argument('-l', metavar='-L', type=str, help=HELP_LIBC, default=None)
+    parser.add_argument('-e', metavar='-E', type=bool, help=HELP_EXPLOIT, nargs='?', \
+    const=True, default=False)
+
+    args = parser.parse_args()
+
+    binary_name = args.b
+    libc_name = args.l
+    exploit_name = args.e
+
+    # Patch in a new linker so we can ld_preload
+    ld_patcher = LinkerPatcher(binary_name, libc_name, exploit_name)
+    ld_patcher.patch_linker_for_binary()
+
 if __name__ == "__main__":
-	# Parse out the arguments
-	parser = argparse.ArgumentParser(description=HELP_DESCRIPTION)
-	parser.add_argument("-b", metavar='-B', type=str, help=HELP_BINARY, default=None)
-	parser.add_argument('-l', metavar='-L', type=str, help=HELP_LIBC, default=None)
-	parser.add_argument('-e', metavar='-E', type=bool, help=HELP_EXPLOIT, nargs='?', \
-		const=True, default=False)
-
-	args = parser.parse_args()
-
-	binary_name = args.b
-	libc_name = args.l
-	exploit_name = args.e
-
-	# Patch in a new linker so we can ld_preload
-	ld_patcher = LinkerPatcher(binary_name, libc_name, exploit_name)
-	ld_patcher.patch_linker_for_binary()
+    main()
