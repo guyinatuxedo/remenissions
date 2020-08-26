@@ -55,7 +55,7 @@ Could not pwn binary
 
 ## Install
 
-So to install remenissions, there are currently two defined methods. Keep in mind that remenissions was developed and tested on Ubuntu. The first is an install script. You just need to first edit it, and set the directory for where ghidra is on your system:
+So to install remenissions, there are currently three defined methods. Keep in mind that remenissions was developed and tested on Ubuntu. The first is an install script. You just need to first edit it, and set the directory for where ghidra is on your system:
 
 Edit the script
 
@@ -87,11 +87,16 @@ $	./setup.sh
 
 The second method is a manual installation. The docs for this can be found under `docs/install.md`.
 
-Currently working on making a dockerfile for remenissions, more to come.
+The third method is a vm that I made that has remenissions already setup, which can be found here: `https://drive.google.com/file/d/1UfQ9F5zDsdbfdgbgSkbHUhn6CUT_J7zw/view?usp=sharing`
+
+I initially tried to use a dockerfile, however due to a lot of issues, I went with a vm instead.
 
 ## How Does it Work?
 
-Currently documenting the internal working of remenissions, more to come.
+For documentation about how it works, you can check under `/docs`
+
+[Documentation](https://github.com/guyinatuxedo/remenissions/tree/master/docs)
+
 
 ## Questions
 
@@ -101,6 +106,22 @@ If you have any questions, find any bugs, or have any potential feature suggesti
 https://discord.gg/p5E3VZF
 ```
 
-## Why the name?
+## Why the names?
 
 Remenissions is the name of a great Avenged Sevenfold song: `https://www.youtube.com/watch?v=tysmwGx7TNU`
+
+Solway_firth is the name of a great slipknot song: `https://www.youtube.com/watch?v=V3ADK6gsDGg`
+
+Diamond Eyes is the name of a great shinedown song: `https://www.youtube.com/watch?v=hez6tDpiWDA`
+
+Death Stranding is the name of a great song: `https://www.youtube.com/watch?v=bv2yNre7saU`
+
+## Special Thanks
+
+Special thanks to these people, for dealing with my memes while making this:
+
+```
+noop
+mmaekr
+SmoothHacker
+```
