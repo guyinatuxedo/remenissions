@@ -87,7 +87,7 @@ $	./setup.sh
 
 The second method is a manual installation. The docs for this can be found under `docs/install.md`.
 
-The third method is a vm that I made that has remenissions already setup, which can be found here: `https://drive.google.com/file/d/1UfQ9F5zDsdbfdgbgSkbHUhn6CUT_J7zw/view?usp=sharing`
+The third method is a vm that I made that has remenissions already setup (username is `remenissions`, password is `password`), which can be found here: `https://drive.google.com/file/d/1UfQ9F5zDsdbfdgbgSkbHUhn6CUT_J7zw/view?usp=sharing`
 
 I initially tried to use a dockerfile, however due to a lot of issues, I went with a vm instead.
 
