@@ -92,6 +92,7 @@ The third method is a vm that I made that has remenissions already setup (userna
 I initially tried to use a dockerfile, however due to a lot of issues, I went with a vm instead.
 
 ## Docker
+
 Skip all the install steps and just use docker:  
 ```
 $ docker build -t remenissions .
@@ -103,6 +104,8 @@ alias remenissions='docker run --rm -it -v $(pwd):/shared remenissions'
 ```
 This will drop you into a tmux session in a docker container with remenissions installed.  
 Just use remenissions as you normally would in this docker container.
+
+Docker support was added by https://github.com/MEhrn00. As of now, I have not run this through the hundreds of test cases, so there may or may not be stability issues.
 
 ## How Does it Work?
 
