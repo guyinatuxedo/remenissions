@@ -14,7 +14,7 @@ RUN apt-get install -y sudo tmux curl unzip openjdk-11-jdk openjdk-11-jre-headle
 
 RUN mkdir -p /tools/ghidra
 WORKDIR /tools/ghidra
-RUN curl "https://ghidra-sre.org/ghidra_9.1.2_PUBLIC_20200212.zip" -o ghidra.zip
+RUN curl -L "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_9.1.2_build/ghidra_9.1.2_PUBLIC_20200212.zip" -o ghidra.zip
 RUN unzip ghidra.zip
 RUN rm ghidra.zip
 
