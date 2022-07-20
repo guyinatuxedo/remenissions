@@ -7,59 +7,59 @@ So this is meant to be a writeup for how to manually install remenissions, since
 
 Of course, you will need git:
 
-```
-sudo apt-get install git
+```console
+$ sudo apt-get install git
 ```
 
 Clone the repo:
 
-```
-git clone https://github.com/guyinatuxedo/remenissions.git
+```console
+$ git clone https://github.com/guyinatuxedo/remenissions.git
 ```
 
 Now you will need to set the install directories in `remenissions/solway_firth.py`. To do this, edit this file:
 
-```
-vim /Hackery/remenissions/remenissions
+```console
+$ vim /Hackery/remenissions/remenissions
 ```
 
 Set this line to the installation directory:
 
-```
-INSTALL_DIR = "/Hackery/remenissions/"
+```console
+$ INSTALL_DIR = "/Hackery/remenissions/"
 ```
 
 Edit this file next:
 
-```
-vim /Hackery/remenissions/solway_firth.py
+```console
+$ vim /Hackery/remenissions/solway_firth.py
 ```
 
 Set this line to the installation directory:
-```
-INSTALL_DIR = "/Hackery/remenissions/"
+```console
+$ INSTALL_DIR = "/Hackery/remenissions/"
 ```
 
 Then next, make a symbolic link to `remenissions` from your `$PATH` directories:
 
-```
-echo $PATH
+```console
+$ echo $PATH
 /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
-sudo ln -s /Hackery/remenissions/remenissions /usr/local/bin/remenissions
+$ sudo ln -s /Hackery/remenissions/remenissions /usr/local/bin/remenissions
 ```
 
 You will also need to install `pwntools` (from `http://docs.pwntools.com/en/latest/install.html`):
 
-```
-sudo apt-get install python3 python3-pip python3-dev git libssl-dev libffi-dev build-essential
-sudo python3 -m pip install --upgrade pip
-sudo python3 -m pip install --upgrade pwntools
+```console
+$ sudo apt-get install python3 python3-pip python3-dev git libssl-dev libffi-dev build-essential
+$ sudo python3 -m pip install --upgrade pip
+$ sudo python3 -m pip install --upgrade pwntools
 ```
 
-Now with the exact version of pwntools you get, there is one thing you need to watch out for with `gdb.attach()`. That is if the argument to execute gdb commands is either `execute` or `gdbscript`. I have a constant in `solway_firth.py` called `EXECUTE_STRING` whcih you can set this, if the default value doesn't match your enviornment.
+Now with the exact version of pwntools you get, there is one thing you need to watch out for with `gdb.attach()`. That is if the argument to execute gdb commands is either `execute` or `gdbscript`. I have a constant in `solway_firth.py` called `EXECUTE_STRING` which you can set this, if the default value doesn't match your enviornment.
 
-```
-EXECUTE_STRING = "gdbscript"
+```console
+$ EXECUTE_STRING = "gdbscript"
 #EXECUTE_STRING = "execute"
 ```
 
@@ -71,15 +71,15 @@ For the wrapper `gef`, you can find it here with install instructions `https://g
 
 Also there is one gdb script that you will need to add to your `.gdbinit` file (`far_away.py`). To add these two, you can edit this file:
 
-```
-vim ~/.gdbinit
+```console
+$ vim ~/.gdbinit
 ```
 
 Add these two lines (replace `/Hackery/remenissions/` with the path to the `remenissions` directory on your box).
 
-```
-source /Hackery/remenissions/dependencies/gef/.gdbinit-gef.py
-source /Hackery/remenissions/far_away.py
+```console
+$ source /Hackery/remenissions/dependencies/gef/.gdbinit-gef.py
+$ source /Hackery/remenissions/far_away.py
 ```
 
 ## one_gadget
@@ -88,60 +88,60 @@ Remenissions needs uses `one_gadget` to find one gadgets.
 
 First, you may need to install `gem` and `ruby` first:
 
-```
-sudo apt-get install gem
-sudo apt-get install ruby
+```console
+$ sudo apt-get install gem
+$ sudo apt-get install ruby
 ```
 
 Then install `one_gadget`:
 
-```
-sudo gem install one_gadget
+```console
+$ sudo gem install one_gadget
 ```
 
 ## Ghidra / Death Stranding
 
 For static analysis, remenissions uses ghidra, so we will need to set it up. First download ghidra, and unzip it.
 
-```
-wget https://ghidra-sre.org/ghidra_9.1.2_PUBLIC_20200212.zip
-unzip -D ghidra_9.1.2_PUBLIC_20200212.zip
+```console
+$ wget https://ghidra-sre.org/ghidra_9.1.2_PUBLIC_20200212.zip
+$ unzip -D ghidra_9.1.2_PUBLIC_20200212.zip
 ```
 
 You will also need to install java:
 
-```
-sudo apt-get install openjdk-11-jdk
-sudo apt-get install openjdk-11-jre-headless
+```console
+$ sudo apt-get install openjdk-11-jdk
+$ sudo apt-get install openjdk-11-jre-headless
 ```
 
 Run the `ghidraRun` script, just to make sure the ghidra installation is working.
 
 Now you will need to specify the path of the headless analyzer elf `analyzeHeadless` which will probably be under the `support` direcotry of the ghidra folder for remenissions. Edit remenissions:
 
-```
-vim /Hackery/remenissions/remenissions
+```console
+$ vim /Hackery/remenissions/remenissions
 ```
 
 Specify the ghidra headless analyzer directory with this line:
 
-```
-HEADLESS_GHIDRA_DIR = "/tools/ghidra/ghidra_9.1.2_PUBLIC/support/"
+```console
+$ HEADLESS_GHIDRA_DIR = "/tools/ghidra/ghidra_9.1.2_PUBLIC/support/"
 ```
 
 The last thing you will need to do is place `death_stranding.py` in the ghidra scripts directory. 
 
-```
-cp /Hackery/remenissions/static_analyzer/death_stranding.py /tools/ghidra/ghidra_9.1.2_PUBLIC/Ghidra/Features/Python/ghidra_scripts/
+```console
+$ cp /Hackery/remenissions/static_analyzer/death_stranding.py /tools/ghidra/ghidra_9.1.2_PUBLIC/Ghidra/Features/Python/ghidra_scripts/
 ```
 
 ## itl
 
 The tool `itl` (from `https://github.com/guyinatuxedo/itl`) is used to deal with linking issues. You can find a copy of it under `/dependencies/`.
 
-```
-cd /Hackery/remenissions/dependencies/itl/
-sudo ./install 
+```console
+$ cd /Hackery/remenissions/dependencies/itl/
+$ sudo ./install 
 ```
 
 ## sf
@@ -150,21 +150,21 @@ The tool `sf` is used as a payload generation api (from `https://github.com/guyi
 
 You might need to install `pip3`:
 
-```
-sudo apt-get install python3-pip
+```console
+$ sudo apt-get install python3-pip
 ```
 
 And you might need to install `setuptools`:
 
-```
-sudo pip3 install setuptools
+```console
+$ sudo pip3 install setuptools
 ```
 
 Then install `sf`:
 
-```
-cd /Hackery/remenissions/dependencies/sf/
-sudo python3 setup.py install
+```console
+$ cd /Hackery/remenissions/dependencies/sf/
+$ sudo python3 setup.py install
 ```
 
 ## The_Night
@@ -173,18 +173,18 @@ sudo python3 setup.py install
 
 First install `zstandard`:
 
-```
-sudo pip3 install zstandard
+```console
+$ sudo pip3 install zstandard
 ```
 
-```
-cd /Hackery/remenissions/dependencies/The_Night/
+```console
+$ cd /Hackery/remenissions/dependencies/The_Night/
 ```
 
 You will first need to download the libcs / parse the symbols (may take a few minutes):
 
-```
-python3 download.py 
+```console
+$ python3 download.py 
 Downloading: libc6-amd64_2.10.1-0ubuntu15_i386.so
 Downloading: libc6-amd64_2.10.1-0ubuntu19_i386.so
 Downloading: libc6-amd64_2.11.1-0ubuntu7.11_i386.so
@@ -193,14 +193,14 @@ Downloading: libc6-amd64_2.11.1-0ubuntu7.11_i386.so
 
 Then you can install `The_Night`:
 
-```
-sudo python3 setup.py install
+```console
+$ sudo python3 setup.py install
 ```
 
 Lastly you will need to se the `THE_NIGHT_LIBCS` value in `solway_firth.py` to the directory of the `The_Night` libcs directory:
 
-```
-THE_NIGHT_LIBCS = "/Hackery/remenissions/dependencies/The_Night/libcs/"
+```console
+$ THE_NIGHT_LIBCS = "/Hackery/remenissions/dependencies/The_Night/libcs/"
 ```
 
 ## ROPgadget
