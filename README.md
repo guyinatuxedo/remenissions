@@ -6,50 +6,50 @@ This is an autopwner for simple ctf pwn challenges. It has pwned 100+ ctf challe
 
 To use remenissions:
 
-```
-$	remenissions -b <binary name>
+```console
+$ remenissions -b <binary name>
 ```
 
 Example:
 
-```
-$	remenissions -b chall-test_csaw18-getit
+```console
+$ remenissions -b chall-test_csaw18-getit
 ```
 
 If you have a libc file:
 
-```
-$	remenissions -b chall-test_encryp19-pwn2 -l libc-2.30.so
+```console
+$ remenissions -b chall-test_encryp19-pwn2 -l libc-2.30.so
 ```
 
 If you have the ip/port that the challenge is running on. This is recommended as it will increase the number of ways remenissions can possible solve a challenge:
 
-```
-$	remenissions -b hidden_flag_function_with_args -i 4c1f411430b8fc27.247ctf.com -p 50402
+```console
+$ remenissions -b hidden_flag_function_with_args -i 4c1f411430b8fc27.247ctf.com -p 50402
 ```
 
 If you have additional files that are needed to run the binary (looking at you hack@ucf):
 
-```
-$	remenissions -b chall-test_hackucf-ret -a libpwnableharness32.so
+```console
+$ remenissions -b chall-test_hackucf-ret -a libpwnableharness32.so
 ```
 
 If remenissions successfully generates an exploit, you will see a string like this:
 
-```
+```console
 Exploit Successful: exploit-BofFunc.py
 ```
 
 And you should see an exploit like this:
 
-```
-$	ls | grep verified
+```console
+$ ls | grep verified
 verified-exploit-BofFunc.py
 ```
 
 If remenissions cannot pwn the binary, you will see a string like this:
 
-```
+```console
 Could not pwn binary
 ```
 
@@ -59,30 +59,31 @@ So to install remenissions, there are currently three defined methods. Keep in m
 
 Edit the script
 
-```
-$	vim setup.sh
+```console
+$ vim setup.sh
 ```
 
 Set this variable to your ghdira directory:
 
-```
-GHIDRA_DIR="/tools/ghidra"
+```console
+$ GHIDRA_DIR="/tools/ghidra"
 ```
 
 Which your ghidra directory should look like this:
 
-```
-$	pwd
+```console
+$ pwd
 /tools/ghidra
-$	ls
+
+$ ls
 docs        Ghidra                          ghidraRun      GPL      licenses  server
 Extensions  ghidra_9.1_PUBLIC_20191023.zip  ghidraRun.bat  LICENSE  projects  support
 ```
 
 Then just run the setup script:
 
-```
-$	./setup.sh
+```console
+$ ./setup.sh
 ```
 
 The second method is a manual installation. The docs for this can be found under `docs/install.md`.
@@ -94,13 +95,14 @@ I initially tried to use a dockerfile, however due to a lot of issues, I went wi
 ## Docker
 
 Skip all the install steps and just use docker:  
-```
+```console
 $ docker build -t remenissions .
+
 $ docker run --rm -it -v $(pwd):/shared remenissions
 ```
 If you're lazy and don't wanna remember docker stuff, just add this alias to your bashrc:
-```
-alias remenissions='docker run --rm -it -v $(pwd):/shared remenissions'
+```console
+$ alias remenissions='docker run --rm -it -v $(pwd):/shared remenissions'
 ```
 This will drop you into a tmux session in a docker container with remenissions installed.  
 Just use remenissions as you normally would in this docker container.
