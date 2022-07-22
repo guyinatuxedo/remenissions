@@ -199,8 +199,8 @@ $ sudo python3 setup.py install
 
 Lastly you will need to se the `THE_NIGHT_LIBCS` value in `solway_firth.py` to the directory of the `The_Night` libcs directory:
 
-```console
-$ THE_NIGHT_LIBCS = "/Hackery/remenissions/dependencies/The_Night/libcs/"
+```
+THE_NIGHT_LIBCS = "/Hackery/remenissions/dependencies/The_Night/libcs/"
 ```
 
 ## ROPgadget
